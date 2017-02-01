@@ -1,0 +1,176 @@
+<HTML>
+<HEAD><TITLE>Copybook Payload Calculation</TITLE>
+<SCRIPT LANGUAGE="VBScript">
+'Option Explicit
+'' The subs are for stack manipulation based on a 1-dimension array
+' Tests if this stack is empty.
+Function isEmptyStck(ByRef stckArray)
+	Dim intValue
+	'When stckArray has just been created, it doesn't have a size and UBound will fail
+	On Error Resume Next
+	intValue = UBound(stckArray)
+	isEmptyStck = CBool(Err.Number <> 0) or (intValue = -1)
+End Function
+
+' Removes the object at the top of this stack and returns that object as the value of this function. --
+' NB: if stckPop is called without the assignment, the element won't be removed from the stack
+Function stckPop(ByRef stckArray)
+	Dim varResult
+	varResult = ""
+	If (isEmptyStck(stckArray) = false) Then
+		varResult = stckArray(UBound(stckArray))
+		Redim Preserve stckArray(UBound(stckArray)-1)
+	End If
+	stckPop = varResult
+End Function
+
+' Pushes an item onto the top of this stack.
+Function stckPush(ByRef stckArray, varValue)
+	If isEmptyStck(stckArray) Then
+		Redim stckArray(0)
+	Else
+		Redim Preserve stckArray(UBound(stckArray)+1)
+	End If
+	stckArray(UBound(stckArray)) = varValue
+End Function
+
+' Display all the elements contained in the stack
+Function stckDisplay(ByRef stckArray)
+	Dim intLoop, strTmp
+	strTmp = ""
+	If (isEmptyStck(stckArray) = false) Then
+		For intLoop = 0 to UBound(stckArray)
+			strTmp = strTmp+"["+CStr(intLoop)+":"+CStr(stckArray(intLoop))+"]"
+		Next
+	End If
+	MsgBox strTmp
+End Function
+
+' Looks at the object at the top of this stack without removing it from the stack.
+Function stckPeek(ByRef stckArray)
+	Dim varResult
+	varResult = ""
+	If (isEmptyStck(stckArray) = false) Then
+		varResult = stckArray(UBound(stckArray))
+	End If
+	stckPeek = varResult
+End Function
+''Other fns to implement:
+'		search(obj): Returns the 1-based position where an object is on this stack. 							-->
+
+Sub CalcPayload
+  Dim lclCbForm, cbFilename, objFSO, objFile, strLine, re, matches
+  Dim currentLevel, previousLevel, operation, value, occurrence, intTmp, strTmp
+  Dim stckLevels
+  intCounter = 0
+  Const ForReading = 1
+  previousLevel = -1
+  operation = ""
+  Set re = new RegExp
+  Set lclCbForm = Document.forms("CbForm")
+
+  'For testing purpose, cbFilename is hardcoded
+  cbFilename = "C:\cb2.txt" 'lclCbForm.cbFile.value
+
+	If (cbFilename <> "") Then
+		Set objFSO = CreateObject("Scripting.FileSystemObject")		
+		Set objFile = objFSO.OpenTextFile(cbFilename, ForReading)
+
+		Do Until objFile.AtEndOfStream
+			strLine = objFile.ReadLine
+			
+			re.Pattern = "^[ \t]*([0-9]+).*$"
+			Set matches = re.Execute(strLine)
+			
+			If (matches.count > 0) Then
+				currentLevel = matches(0).submatches(0)
+
+			' Line
+				If (currentLevel = previousLevel) Then
+					operation = operation+"+"
+				ElseIf (currentLevel < previousLevel) Then
+					Do While (stckPeek(stckLevels) <> currentLevel)
+						intTmp = stckPop(stckLevels)
+						operation = operation+")"
+					Loop
+					operation=operation+"+"
+				Else
+					Call stckPush(stckLevels, currentLevel)
+				End If
+				previousLevel = currentLevel
+
+' Trial
+        intCounter = intCounter + 1
+        document.write("<div id='container"+CStr(intCounter)+"'>")
+        document.write("Line {"+strLine+"}")
+        're.Pattern = "^.*PIC (X|9)\(([0-9]*\.*[0-9]*)\)(|V9)\(([0-9]*)\).$"
+        re.Pattern = "^.*PIC (X|S*9+)\(*([0-9]*\.*[0-9]*)\)*(|V9+)\(*([0-9]*)\)*"
+        Set matches = re.Execute(strLine)
+        If (matches.count > 0) Then
+          document.write(" [sub:"+CStr(matches(0).submatches.count)+"]")
+          document.write("["+matches(0).submatches(0)+"]["+matches(0).submatches(1)+"]["+matches(0).submatches(2)+"]["+matches(0).submatches(3)+"]<BR>")
+          blMatched = true
+        Else
+          document.write(" !Matched<BR>")
+          blMatched = false
+        End If
+        document.write("</div>")
+        If (blMatched) Then
+          strCmd = "container"+CStr(intCounter)+".style.backgroundColor = "+chr(34)+"yellow"+chr(34)
+        Else
+          strCmd = "container"+CStr(intCounter)+".style.backgroundColor = "+chr(34)+"red"+chr(34)
+        End If
+        Execute(strCmd)
+' //Trial
+
+				re.Pattern = "^.*\((.*)\).*$" 
+  			Set matches = re.Execute(strLine)
+			' Data line
+				If (matches.count > 0) Then
+					value = CDbl(matches(0).submatches(0))
+          ' in case we are dealing with a decimal value, size=sum(integer part + decimal part)
+          ' NB: the . is not accounted for. 
+					If (CInt(value) <> value) Then
+						value = Int(Value) + ((value - Int(value)) * 10^len(split(CStr(value), ".", 2)(1)))
+					End If
+					
+					operation = operation+CStr(value)
+
+			' Occurence line
+				Else
+					occurrence = 1
+					re.Pattern = "^.* ([0-9]+) TIMES.*$"
+					Set matches = re.Execute(strLine)
+					If (matches.count > 0) Then
+						occurrence = CInt(matches(0).submatches(0))
+					End If
+					If (Len(operation) = 0) Then
+						operation = "1*("
+					End If
+					operation = operation+CStr(occurrence)+"*("
+				End If
+			End If
+		Loop
+		objFile.Close
+
+		Do While (isEmptyStck(stckLevels) = false)
+			intTmp = stckPop(stckLevels)
+			operation = operation+")"
+		Loop
+		document.writeln("<HR><b>Operation breakdown:</b> "+operation)
+		document.writeln("<HR><b>Payload size:</b> "+CStr(eval(operation))+"<HR>")
+	Else
+		MsgBox "Please select a file to analyze"
+	End If
+End Sub
+</SCRIPT>
+</HEAD>
+
+<BODY>
+	<H3>Cobybook Payload Calculation</H3><HR>
+	<form id="cbForm" action="#" onsubmit="CalcPayload(); return false;" language="jscript">
+		Select the copybook to analyze:<BR>
+		<input name="cbFile" TYPE="file"><input name="Submit" TYPE="Submit" VALUE="Submit">
+	</form>
+</BODY>
+</HTML>
